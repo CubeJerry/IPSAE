@@ -13,7 +13,7 @@
 # April 6, 2025
 # MIT license: script can be modified and redistributed for non-commercial and commercial use, as long as this information is reproduced.
 
-# includes support for Boltz1 structures and structures with nucleic acids
+# includes support for Boltz1, Boltz2 structures and structures with nucleic acids
 
 # It may be necessary to install numpy with the following command:
 #      pip install numpy
@@ -44,7 +44,7 @@ if len(sys.argv) < 5:
     print("   python ipsae.py <path_to_pae_json_file> <path_to_mmcif_file> <pae_cutoff> <dist_cutoff>")
     print("   python ipsae.py fold_aurka_tpx2_full_data_0.json  fold_aurka_tpx2_model_0.cif 10 10")
     print("")
-    print("Usage for Boltz1:")
+    print("Usage for Boltz:")
     print("   python ipsae.py <path_to_pae_npz_file> <path_to_mmcif_file> <pae_cutoff> <dist_cutoff>")
     print("   python ipsae.py pae_AURKA_TPX2_model_0.npz  AURKA_TPX2_model_0.cif 10 10")
     sys.exit(1)
@@ -430,50 +430,203 @@ if af2:
         print("AF2 PAE file does not exist: ", pae_file_path)
         sys.exit()
         
-if boltz1:
-    # Boltz1 filenames:
-    # AURKA_TPX2_model_0.cif
-    # confidence_AURKA_TPX2_model_0.json
-    # pae_AURKA_TPX2_model_0.npz
-    # plddt_AURKA_TPX2_model_0.npz
-    
 
-    plddt_file_path=pae_file_path.replace("pae","plddt")
+
+if boltz1:  
+    plddt_file_path = pae_file_path.replace("pae", "plddt")
+    
     if os.path.exists(plddt_file_path):
-        data_plddt=np.load(plddt_file_path)
-        plddt_boltz1=np.array(100.0*data_plddt['plddt'])
-        plddt =    plddt_boltz1[np.ix_(token_array.astype(bool))]
-        cb_plddt = plddt_boltz1[np.ix_(token_array.astype(bool))]
+        try:
+            data_plddt = np.load(plddt_file_path)
+            
+            
+            if 'plddt' in data_plddt:
+                plddt_raw = np.array(data_plddt['plddt'])
+                
+                
+                # Scale to 0-100 range
+                if plddt_raw.max() <= 1.0:
+                    plddt_boltz1 = np.array(100.0 * plddt_raw)
+                else:
+                    plddt_boltz1 = np.array(plddt_raw)
+                    
+                
+            else:
+                print(f"ERROR: 'plddt' key not found")
+                sys.exit(1)
+                
+            data_plddt.close()
+            
+        except Exception as e:
+            print(f"Error loading pLDDT file: {e}")
+            sys.exit(1)
+            
+     
+        try:
+            
+            # Check if lengths match
+            if len(plddt_boltz1) == np.sum(token_array):
+                # The pLDDT array is already filtered - use directly
+                plddt = plddt_boltz1
+                cb_plddt = plddt_boltz1
+                print("Using pLDDT array directly (already filtered)")
+            elif len(plddt_boltz1) == len(token_array):
+                # Apply token mask normally
+                bool_mask = token_array.astype(bool)
+                plddt = plddt_boltz1[bool_mask]
+                cb_plddt = plddt_boltz1[bool_mask]
+                print(f"Applied token mask - pLDDT length: {len(plddt)}")
+            else:
+                # Fallback - use first N residues
+                n_residues = min(len(plddt_boltz1), numres)
+                plddt = plddt_boltz1[:n_residues]
+                cb_plddt = plddt_boltz1[:n_residues]
+                print(f"Using fallback - first {n_residues} residues")
+                
+        except Exception as e:
+            print(f"Error with token mask: {e}")
+            plddt = plddt_boltz1
+            cb_plddt = plddt_boltz1
+            
     else:
-        plddt = np.zeros(ntokens)
-        cb_plddt = np.zeros(ntokens)
+        print(f"pLDDT file does not exist: {plddt_file_path}")
+        plddt = np.zeros(numres)
+        cb_plddt = np.zeros(numres)
         
+    # Handle PAE file
     if os.path.exists(pae_file_path):
-        data_pae = np.load(pae_file_path)
-        pae_matrix_boltz1=np.array(data_pae['pae'])
-        pae_matrix = pae_matrix_boltz1[np.ix_(token_array.astype(bool), token_array.astype(bool))]
+        try:
+            data_pae = np.load(pae_file_path)
+        
+            
+            if 'pae' in data_pae:
+                pae_matrix_boltz1 = np.array(data_pae['pae'])
+                
 
+                if len(pae_matrix_boltz1) == np.sum(token_array):
+                    # PAE matrix is already filtered
+                    pae_matrix = pae_matrix_boltz1
+                elif len(pae_matrix_boltz1) == len(token_array):
+                    # Apply token mask
+                    bool_mask = token_array.astype(bool)
+                    pae_matrix = pae_matrix_boltz1[np.ix_(bool_mask, bool_mask)]
+                else:
+                    # Use available size
+                    n = min(len(pae_matrix_boltz1), numres)
+                    pae_matrix = pae_matrix_boltz1[:n, :n]
+                    
+            else:
+                print(f"ERROR: 'pae' key not found")
+                sys.exit(1)
+                
+            data_pae.close()
+            
+        except Exception as e:
+            print(f"Error loading PAE file: {e}")
+            sys.exit(1)
     else:
-        print("Boltz1 PAE file does not exist: ", pae_file_path)
-        sys.exit()
+        print("Boltz PAE file does not exist: ", pae_file_path)
+        sys.exit(1)
     
-    summary_file_path=pae_file_path.replace("pae","confidence")
-    summary_file_path=summary_file_path.replace(".npz",".json")
-    iptm_boltz1=   {chain1: {chain2: 0     for chain2 in unique_chains if chain1 != chain2} for chain1 in unique_chains}
-    if os.path.exists(summary_file_path):
+    # Handle summary file with multi-character chain IDs
+    summary_file_path = pae_file_path.replace("pae", "confidence")
+    summary_file_path = summary_file_path.replace(".npz", ".json")
+    
+    iptm_boltz1 = {chain1: {chain2: 0 for chain2 in unique_chains if chain1 != chain2} for chain1 in unique_chains}
+    
+if os.path.exists(summary_file_path):
+    try:
         with open(summary_file_path, 'r') as file:
             data_summary = json.load(file)
-
-            boltz1_chain_pair_iptm_data=data_summary['pair_chains_iptm']
+            
+        print(f"Available keys in summary file: {list(data_summary.keys())}")
+        
+        if 'pair_chains_iptm' in data_summary:
+            boltz1_chain_pair_iptm_data = data_summary['pair_chains_iptm']
+            print(f"Chain pair ipTM data structure: {type(boltz1_chain_pair_iptm_data)}")
+            
+            # Debug: Print the actual structure
+            print(f"Chain pair ipTM data content: {boltz1_chain_pair_iptm_data}")
+            if isinstance(boltz1_chain_pair_iptm_data, dict):
+                print(f"Available chain pair keys: {list(boltz1_chain_pair_iptm_data.keys())}")
+            
+            # Create mapping from chain IDs to indices in the data
+            available_indices = list(boltz1_chain_pair_iptm_data.keys())
+            sorted_chains = sorted(unique_chains)  # Sort chains alphabetically
+            
+            chain_to_index = {}
+            for i, chain in enumerate(sorted_chains):
+                if i < len(available_indices):
+                    chain_to_index[chain] = available_indices[i]
+            
+            print(f"Chain to index mapping: {chain_to_index}")
+            
+            # Handle different possible structures
             for chain1 in unique_chains:
-                nchain1=  ord(chain1) - ord('A')  # map A,B,C... to 0,1,2...
                 for chain2 in unique_chains:
-                    if chain1 == chain2: continue
-                    nchain2=ord(chain2) - ord('A')
-                    iptm_boltz1[chain1][chain2]=boltz1_chain_pair_iptm_data[str(nchain1)][str(nchain2)]
-    else:
-        print("Boltz1 summary file does not exist: ", summary_file_path)
-
+                    if chain1 == chain2: 
+                        continue
+                    
+                    # Initialize with default value
+                    iptm_value = 0.0
+                    found = False
+                    
+                    # Try multiple access methods in order of preference
+                    access_methods = []
+                    
+                    # Method 1: Use our chain-to-index mapping
+                    if chain1 in chain_to_index and chain2 in chain_to_index:
+                        idx1 = chain_to_index[chain1]
+                        idx2 = chain_to_index[chain2]
+                        access_methods.append(lambda i1=idx1, i2=idx2: boltz1_chain_pair_iptm_data[i1][i2])
+                    
+                    # Method 2: Direct chain ID lookup (in case chains are already numeric or matching)
+                    access_methods.extend([
+                        lambda: boltz1_chain_pair_iptm_data[chain1][chain2],
+                        # Method 3: Reverse order (chain2-chain1)
+                        lambda: boltz1_chain_pair_iptm_data[chain2][chain1],
+                        # Method 4: Concatenated key (chain1-chain2)
+                        lambda: boltz1_chain_pair_iptm_data[f"{chain1}-{chain2}"],
+                        # Method 5: Concatenated key (chain2-chain1)
+                        lambda: boltz1_chain_pair_iptm_data[f"{chain2}-{chain1}"],
+                        # Method 6: If it's a flat dictionary with tuple keys
+                        lambda: boltz1_chain_pair_iptm_data[(chain1, chain2)],
+                        # Method 7: If it's a flat dictionary with tuple keys (reverse)
+                        lambda: boltz1_chain_pair_iptm_data[(chain2, chain1)],
+                    ])
+                    
+                    for i, method in enumerate(access_methods):
+                        try:
+                            result = method()
+                            if result is not None:
+                                iptm_value = float(result)
+                                found = True
+                                print(f"Found ipTM for {chain1}-{chain2}: {iptm_value} (method {i+1})")
+                                break
+                        except (KeyError, TypeError, ValueError, IndexError):
+                            continue
+                    
+                    if not found:
+                        print(f"Could not find ipTM for chain pair {chain1}-{chain2}, using default: {iptm_value}")
+                    
+                    iptm_boltz1[chain1][chain2] = iptm_value
+        
+        else:
+            print("No 'pair_chains_iptm' found in summary file")
+            # Initialize with default values
+            for chain1 in unique_chains:
+                for chain2 in unique_chains:
+                    if chain1 != chain2:
+                        iptm_boltz1[chain1][chain2] = 0.0
+                        
+    except Exception as e:
+        print(f"Error reading summary file: {e}")
+        # Initialize with default values
+        for chain1 in unique_chains:
+            for chain2 in unique_chains:
+                if chain1 != chain2:
+                    iptm_boltz1[chain1][chain2] = 0.0
+        
 if af3:
     # Example Alphafold3 server filenames
     #   fold_aurka_0_tpx2_0_full_data_0.json
